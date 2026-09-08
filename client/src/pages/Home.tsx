@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import {
   Activity,
   ArrowDownRight,
@@ -70,16 +72,25 @@ function scrollToId(id: string) {
 }
 
 export default function Home() {
+  // The useAuth hook provides authentication state.
+  // To implement login/logout, call logout(), or start login from an event
+  // handler: onClick={() => startLogin()} (imported from "@/const"). Never call
+  // startLogin() during render (no href={startLogin()}) — it mints a one-time
+  // nonce cookie and must run only at the moment of navigation.
+  useAuth();
+  const liveQuery = trpc.apix.latest.useQuery(undefined, { refetchInterval: 30_000, staleTime: 20_000 });
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [frequency, setFrequency] = useState<Frequency>("Daily");
   const [selectedRoute, setSelectedRoute] = useState<RouteCode>("ALL");
-  const active = routeData[selectedRoute];
+  const liveRoute = selectedRoute === "ALL" ? liveQuery.data?.aggregate : liveQuery.data?.routes.find((row) => row.routeCode === selectedRoute);
+  const active = liveRoute ? { ...routeData[selectedRoute], value: liveRoute.value.toFixed(2), delta: `${liveRoute.changePct >= 0 ? "+" : ""}${liveRoute.changePct.toFixed(1)}%`, direction: liveRoute.changePct >= 0 ? "up" as const : "down" as const } : routeData[selectedRoute];
 
   const chartStats = useMemo(() => {
     if (frequency === "Monthly") return { value: "118.42", change: "+4.7%", range: "Aug 2026" };
     if (frequency === "Weekly") return { value: "117.84", change: "+2.8%", range: "Week 36 · 2026" };
-    return { value: active.value, change: active.delta, range: "08 Sep 2026 · 06:30 IST" };
-  }, [active, frequency]);
+    return { value: active.value, change: active.delta, range: liveQuery.data?.aggregate?.calculatedAt ? new Date(liveQuery.data.aggregate.calculatedAt).toLocaleString() : "Awaiting first collection" };
+  }, [active, frequency, liveQuery.data]);
 
   const showComingSoon = (message: string) => toast(message);
 
@@ -107,14 +118,14 @@ export default function Home() {
         <section className="hero section-pad">
           <div className="hero-grid" />
           <div className="hero-copy">
-            <div className="eyebrow"><span className="eyebrow-line" /> National price intelligence <span className="eyebrow-badge">Prototype</span></div>
+            <div className="eyebrow"><span className="eyebrow-line" /> National price intelligence <span className="eyebrow-badge">30-min refresh</span></div>
             <h1>See the pulse<br /><em>of the sky.</em></h1>
             <p className="hero-lede">APIx converts millions of permitted airfare observations into a transparent, real-time signal for India’s economy.</p>
             <div className="hero-actions">
               <button className="primary-button" onClick={() => scrollToId("dashboard")}>View the live index <ArrowUpRight size={16} /></button>
               <button className="text-button" onClick={() => scrollToId("methodology")}>How it works <span>↓</span></button>
             </div>
-            <div className="hero-note"><ShieldCheck size={16} /> Built for auditable public statistics <span>·</span> Updated every day</div>
+            <div className="hero-note"><ShieldCheck size={16} /> Built for auditable public statistics <span>·</span> Refreshed every 30 minutes</div>
           </div>
           <div className="hero-visual" aria-label="Stylized airfare index visualization">
             <div className="orbit orbit-one" /><div className="orbit orbit-two" />
@@ -129,17 +140,17 @@ export default function Home() {
                 <circle cx="60" cy="190" r="5" /><circle cx="215" cy="112" r="5" /><circle cx="370" cy="70" r="5" /><circle cx="305" cy="226" r="5" />
               </svg>
               <div className="radar-label del">DEL <small>121.08</small></div><div className="radar-label bom">BOM <small>114.36</small></div><div className="radar-label blr">BLR <small>116.72</small></div>
-              <div className="radar-center"><span>INDIA<br />BASKET</span><strong>118.42</strong><small>+2.8% vs last week</small></div>
+              <div className="radar-center"><span>INDIA<br />BASKET</span><strong>{active.value}</strong><small>{active.delta} vs previous period</small></div>
             </div>
-            <div className="float-card float-card-top"><div className="mini-icon coral"><TrendingUp size={16} /></div><div><b>+2.8%</b><span>basket movement</span></div></div>
-            <div className="float-card float-card-bottom"><div className="mini-icon lime"><CircleCheck size={16} /></div><div><b>97.4%</b><span>data coverage today</span></div></div>
+            <div className="float-card float-card-top"><div className="mini-icon coral"><TrendingUp size={16} /></div><div><b>{active.delta}</b><span>basket movement</span></div></div>
+            <div className="float-card float-card-bottom"><div className="mini-icon lime"><CircleCheck size={16} /></div><div><b>{liveRoute ? `${Math.round((liveRoute.coverageRatio || 0) * 100)}%` : "—"}</b><span>data coverage today</span></div></div>
           </div>
         </section>
 
         <section className="signal-strip">
           <div className="signal-item"><span className="signal-number">05</span><span>advance-purchase<br />windows</span></div>
           <div className="signal-item"><span className="signal-number">10</span><span>representative<br />city-pairs</span></div>
-          <div className="signal-item"><span className="signal-number">24h</span><span>scheduled<br />refresh cycle</span></div>
+          <div className="signal-item"><span className="signal-number">30m</span><span>scheduled<br />refresh cycle</span></div>
           <div className="signal-item"><span className="signal-number">100%</span><span>traceable<br />observations</span></div>
           <div className="signal-tag">A clearer signal<br /><em>for a changing market.</em></div>
         </section>
