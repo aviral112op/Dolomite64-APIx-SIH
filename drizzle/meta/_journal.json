@@ -8,6 +8,20 @@
       "when": 1788830510653,
       "tag": "0000_round_fantastic_four",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1788832836875,
+      "tag": "0001_careful_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1788833113058,
+      "tag": "0002_cold_zeigeist",
+      "breakpoints": true
     }
   ]
 }

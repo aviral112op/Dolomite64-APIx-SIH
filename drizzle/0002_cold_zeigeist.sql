@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_runs` MODIFY COLUMN `referenceSource` text NOT NULL;

@@ -15,6 +15,7 @@ import {
   getEnabledRoutes,
   insertFareObservations,
   insertIndexSnapshots,
+  recordSourceCheck,
 } from "./db";
 
 type TriggerType = "scheduled" | "manual" | "replay";
@@ -105,7 +106,7 @@ function buildFixtureQuotes(routes: Awaited<ReturnType<typeof getEnabledRoutes>>
   return quotes;
 }
 
-function normalizeRemoteQuotes(sourceId: string, payload: unknown): QuoteInput[] {
+export function normalizeRemoteQuotes(sourceId: string, payload: unknown): QuoteInput[] {
   const items = Array.isArray(payload) ? payload : (payload as { quotes?: unknown[] } | null)?.quotes;
   if (!Array.isArray(items)) throw new Error(`${sourceId} response must be an array or { quotes: [] }`);
   return items.map((item, index) => {
@@ -136,16 +137,20 @@ function normalizeRemoteQuotes(sourceId: string, payload: unknown): QuoteInput[]
       mandatoryCharges,
       optionalCharges,
       totalFare,
-      availabilityStatus: "available",
+      availabilityStatus: raw.availabilityStatus === "sold_out" || raw.availabilityStatus === "cancelled" || raw.availabilityStatus === "unknown" ? raw.availabilityStatus : "available",
       provenanceUri: raw.provenanceUri ? String(raw.provenanceUri) : undefined,
     };
   });
 }
 
-function deduplicateQuotes(quotes: QuoteInput[]) {
+export function deduplicateQuotes(quotes: QuoteInput[]) {
   const seen = new Set<string>();
   return quotes.filter((quote) => {
-    if (quote.totalFare === undefined || quote.totalFare <= 0) return false;
+    if (!quote.origin || !quote.destination || quote.origin === quote.destination || !quote.travelDate || !Number.isFinite(quote.leadDays) || quote.totalFare === undefined || quote.totalFare <= 0) return false;
+    if (quote.availabilityStatus && quote.availabilityStatus !== "available") return false;
+    if (!Number.isFinite(quote.baseFare) || quote.baseFare < 0) return false;
+    const componentTotal = quote.baseFare + (quote.taxes ?? 0) + (quote.udf ?? 0) + (quote.mandatoryCharges ?? 0) + (quote.optionalCharges ?? 0);
+    if (componentTotal > 0 && Math.abs(componentTotal - quote.totalFare) > Math.max(25, quote.totalFare * 0.02)) return false;
     if (!LEAD_WINDOWS.includes(quote.leadDays)) return false;
     const key = [quote.sourceId, quote.origin, quote.destination, quote.travelDate, quote.carrier, quote.fareFamily, quote.totalFare].join("|");
     if (seen.has(key)) return false;
@@ -159,6 +164,25 @@ function median(values: number[]) {
   if (!ordered.length) return 0;
   const middle = Math.floor(ordered.length / 2);
   return ordered.length % 2 === 0 ? (ordered[middle - 1] + ordered[middle]) / 2 : ordered[middle];
+}
+
+export function markRobustOutliers(quotes: QuoteInput[]) {
+  const groups = new Map<string, QuoteInput[]>();
+  for (const quote of quotes) {
+    const key = `${quote.origin}-${quote.destination}|${quote.leadDays}`;
+    groups.set(key, [...(groups.get(key) ?? []), quote]);
+  }
+  const flagged = new Set<string>();
+  groups.forEach((group, key) => {
+    const values: number[] = group.map((quote: QuoteInput) => quote.totalFare!).sort((a: number, b: number) => a - b);
+    if (values.length < 5) return;
+    const centre = median(values);
+    const mad = median(values.map((value: number) => Math.abs(value - centre))) || 1;
+    for (const quote of group) {
+      if (Math.abs(quote.totalFare! - centre) / mad > 6) flagged.add(`${key}|${quote.sourceQuoteId}`);
+    }
+  });
+  return quotes.map((quote) => ({ quote, outlierCandidate: flagged.has(`${quote.origin}-${quote.destination}|${quote.leadDays}|${quote.sourceQuoteId}`) }));
 }
 
 async function previousValue(routeCode: string) {
@@ -180,13 +204,17 @@ async function calculateAndStore(runId: number, routes: Awaited<ReturnType<typeo
     const changePct = previous ? ((value - previous) / previous) * 100 : 0;
     const coverage = expectedCount ? routeRows.length / Math.max(1, expectedCount / routes.length) : 0;
     routeValues.push({ routeCode: route.routeCode, value, weight: Number(route.trafficWeight) });
-    snapshots.push({ runId, frequency: "daily", routeCode: route.routeCode, value: value.toFixed(4), changePct: changePct.toFixed(4), observationCount: routeRows.length, coverageRatio: Math.min(1, coverage).toFixed(4), qualityStatus: coverage >= 0.75 ? "published" : "provisional" });
+    for (const frequency of ["daily", "weekly", "monthly"] as const) {
+      snapshots.push({ runId, frequency, routeCode: route.routeCode, value: value.toFixed(4), changePct: changePct.toFixed(4), observationCount: routeRows.length, coverageRatio: Math.min(1, coverage).toFixed(4), qualityStatus: coverage >= 0.75 ? "published" : "provisional" });
+    }
   }
   const weightSum = routeValues.reduce((sum, item) => sum + item.weight, 0) || 1;
   const aggregate = routeValues.reduce((sum, item) => sum + item.value * (item.weight / weightSum), 0);
   const previousAggregate = await previousValue("ALL");
   const aggregateChange = previousAggregate ? ((aggregate - previousAggregate) / previousAggregate) * 100 : 0;
-  snapshots.push({ runId, frequency: "daily", routeCode: "ALL", value: aggregate.toFixed(4), changePct: aggregateChange.toFixed(4), observationCount: rows.length, coverageRatio: Math.min(1, rows.length / Math.max(1, expectedCount)).toFixed(4), qualityStatus: rows.length / Math.max(1, expectedCount) >= 0.75 ? "published" : "provisional" });
+  for (const frequency of ["daily", "weekly", "monthly"] as const) {
+    snapshots.push({ runId, frequency, routeCode: "ALL", value: aggregate.toFixed(4), changePct: aggregateChange.toFixed(4), observationCount: rows.length, coverageRatio: Math.min(1, rows.length / Math.max(1, expectedCount)).toFixed(4), qualityStatus: rows.length / Math.max(1, expectedCount) >= 0.75 ? "published" : "provisional" });
+  }
   await insertIndexSnapshots(snapshots);
   return snapshots;
 }
@@ -208,6 +236,7 @@ export async function runApixCollection(triggerType: TriggerType = "scheduled", 
     try {
       if (policy.sourceId === "fixture_demo") {
         rawQuotes.push(...buildFixtureQuotes(routes, collectedAt));
+        await recordSourceCheck(policy.sourceId, true);
         continue;
       }
       const endpointKey = policy.endpointEnvKey;
@@ -219,12 +248,14 @@ export async function runApixCollection(triggerType: TriggerType = "scheduled", 
       const response = await fetch(endpoint, { headers: { accept: "application/json", "user-agent": "APIx-Research/1.0 (contact required)" }, signal: AbortSignal.timeout(20_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       rawQuotes.push(...normalizeRemoteQuotes(policy.sourceId, await response.json()));
+      await recordSourceCheck(policy.sourceId, true);
     } catch (error) {
       errors.push(`${policy.sourceId}: ${String(error)}`);
+      await recordSourceCheck(policy.sourceId, false, `Last check failed: ${String(error)}`);
     }
   }
-  const cleanQuotes = deduplicateQuotes(rawQuotes);
-  const rows: typeof fareObservations.$inferInsert[] = cleanQuotes.map((quote) => ({ ...quote, runId: run.id, travelDate: new Date(`${quote.travelDate}T00:00:00Z`), currency: "INR", baseFare: quote.baseFare!.toFixed(2), taxes: (quote.taxes ?? 0).toFixed(2), udf: (quote.udf ?? 0).toFixed(2), mandatoryCharges: (quote.mandatoryCharges ?? 0).toFixed(2), optionalCharges: (quote.optionalCharges ?? 0).toFixed(2), totalFare: quote.totalFare!.toFixed(2), qualityStatus: "eligible" as const, parserVersion: "collector-v1", collectedAt }));
+  const cleanQuotes = markRobustOutliers(deduplicateQuotes(rawQuotes));
+  const rows: typeof fareObservations.$inferInsert[] = cleanQuotes.map(({ quote, outlierCandidate }) => ({ ...quote, runId: run.id, travelDate: new Date(`${quote.travelDate}T00:00:00Z`), currency: "INR", baseFare: quote.baseFare!.toFixed(2), taxes: (quote.taxes ?? 0).toFixed(2), udf: (quote.udf ?? 0).toFixed(2), mandatoryCharges: (quote.mandatoryCharges ?? 0).toFixed(2), optionalCharges: (quote.optionalCharges ?? 0).toFixed(2), totalFare: quote.totalFare!.toFixed(2), qualityStatus: outlierCandidate ? "outlier_candidate" as const : "eligible" as const, parserVersion: "collector-v1", collectedAt }));
   await insertFareObservations(rows);
   const expectedCount = Math.max(1, routes.length * LEAD_WINDOWS.length * Math.max(1, policies.length));
   await calculateAndStore(run.id, routes, rows, expectedCount);

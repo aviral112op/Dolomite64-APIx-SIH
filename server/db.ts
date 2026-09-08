@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
+  backtestRuns,
   collectionRuns,
   fareObservations,
   indexSnapshots,
@@ -185,6 +186,28 @@ export async function getRouteObservations(routeCode: string, limit: number) {
     .orderBy(desc(fareObservations.collectedAt)).limit(limit);
 }
 
+export async function getRouteLeadTimeProfile(routeCode: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const route = await getRouteMetadata(routeCode);
+  if (!route) return [];
+  return db.select({ leadDays: fareObservations.leadDays, averageFare: sql<number>`avg(${fareObservations.totalFare})`, observationCount: sql<number>`count(*)` })
+    .from(fareObservations)
+    .where(and(eq(fareObservations.origin, route.origin), eq(fareObservations.destination, route.destination), eq(fareObservations.qualityStatus, "eligible")))
+    .groupBy(fareObservations.leadDays)
+    .orderBy(fareObservations.leadDays);
+}
+
+export async function getBasketLeadTimeProfile() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ leadDays: fareObservations.leadDays, averageFare: sql<number>`avg(${fareObservations.totalFare})`, observationCount: sql<number>`count(*)` })
+    .from(fareObservations)
+    .where(eq(fareObservations.qualityStatus, "eligible"))
+    .groupBy(fareObservations.leadDays)
+    .orderBy(fareObservations.leadDays);
+}
+
 export async function getRecentRuns(limit = 8) {
   const db = await getDb();
   if (!db) return [];
@@ -194,7 +217,7 @@ export async function getRecentRuns(limit = 8) {
 export async function getSourceHealth() {
   const db = await getDb();
   if (!db) return [];
-  return db.select({ sourceId: sourcePolicies.sourceId, displayName: sourcePolicies.displayName, status: sourcePolicies.status, lastSuccessAt: sourcePolicies.lastSuccessAt, notes: sourcePolicies.notes }).from(sourcePolicies).orderBy(sourcePolicies.displayName);
+  return db.select({ sourceId: sourcePolicies.sourceId, displayName: sourcePolicies.displayName, status: sourcePolicies.status, lastCheckedAt: sourcePolicies.lastCheckedAt, lastSuccessAt: sourcePolicies.lastSuccessAt, notes: sourcePolicies.notes }).from(sourcePolicies).orderBy(sourcePolicies.displayName);
 }
 
 export async function getApprovedSourcePolicies() {
@@ -214,4 +237,24 @@ export async function markScheduledJobTriggered(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.update(scheduledJobs).set({ lastTriggeredAt: new Date() }).where(eq(scheduledJobs.id, id));
+}
+
+export async function getLatestBacktest() {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(backtestRuns).orderBy(desc(backtestRuns.createdAt)).limit(1);
+  return rows[0];
+}
+
+export async function saveBacktest(input: typeof backtestRuns.$inferInsert) {
+  const db = await getDb();
+  if (!db) return undefined;
+  await db.insert(backtestRuns).values(input).onDuplicateKeyUpdate({ set: { referenceSource: input.referenceSource, referenceStatus: input.referenceStatus, meanAbsolutePercentageError: input.meanAbsolutePercentageError, rootMeanSquareError: input.rootMeanSquareError, correlation: input.correlation, reportUri: input.reportUri } });
+  return getLatestBacktest();
+}
+
+export async function recordSourceCheck(sourceId: string, success: boolean, note?: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(sourcePolicies).set({ lastCheckedAt: new Date(), ...(success ? { lastSuccessAt: new Date() } : {}), ...(note ? { notes: note } : {}) }).where(eq(sourcePolicies.sourceId, sourceId));
 }

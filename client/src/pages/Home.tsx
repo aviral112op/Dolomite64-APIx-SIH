@@ -86,10 +86,13 @@ export default function Home() {
   // nonce cookie and must run only at the moment of navigation.
   useAuth();
   const liveQuery = trpc.apix.latest.useQuery(undefined, { refetchInterval: 30_000, staleTime: 20_000 });
+  const backtestQuery = trpc.apix.backtest.useQuery(undefined, { staleTime: 60_000 });
+  const basketLeadTimeQuery = trpc.apix.basketLeadTime.useQuery(undefined, { refetchInterval: 30_000, staleTime: 20_000 });
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [frequency, setFrequency] = useState<Frequency>("Daily");
   const [selectedRoute, setSelectedRoute] = useState<RouteCode>("ALL");
+  const leadTimeQuery = trpc.apix.route.leadTime.useQuery({ routeCode: selectedRoute }, { enabled: selectedRoute !== "ALL", refetchInterval: 30_000, staleTime: 20_000 });
   const liveRoute = selectedRoute === "ALL" ? liveQuery.data?.aggregate : liveQuery.data?.routes.find((row) => row.routeCode === selectedRoute);
   const activeBase = routeData[selectedRoute] ?? { label: selectedRoute, value: "—", delta: "—", direction: "up" as const, color: "#a8c8ff", values: routeData.ALL.values };
   const active = liveRoute ? { ...activeBase, value: liveRoute.value.toFixed(2), delta: `${liveRoute.changePct >= 0 ? "+" : ""}${liveRoute.changePct.toFixed(1)}%`, direction: liveRoute.changePct >= 0 ? "up" as const : "down" as const } : activeBase;
@@ -107,6 +110,11 @@ export default function Home() {
         return { route: row.routeCode, cities: fallback?.cities ?? row.routeCode, index: row.value.toFixed(2), change: `${row.changePct >= 0 ? "+" : "−"}${Math.abs(row.changePct).toFixed(1)}%`, coverage: `${Math.round(row.coverageRatio * 100)}%`, tone: fallback?.tone ?? "blue" };
       })
     : routes;
+  const heatmapRows = liveQuery.data?.routes?.length
+    ? liveQuery.data.routes.slice(0, 20)
+    : routes.map((row) => ({ routeCode: row.route, value: Number(row.index), changePct: Number(row.change.replace("+", "").replace("−", "-" ).replace("%", "")), coverageRatio: Number(row.coverage.replace("%", "")) / 100 }));
+  const routeSelectors = ["ALL", ...routes.map((row) => row.route)];
+  const leadTimeRows = selectedRoute === "ALL" ? basketLeadTimeQuery.data?.data : leadTimeQuery.data?.data;
 
   return (
     <div className="site-shell">
@@ -163,7 +171,7 @@ export default function Home() {
 
         <section className="signal-strip">
           <div className="signal-item"><span className="signal-number">05</span><span>advance-purchase<br />windows</span></div>
-          <div className="signal-item"><span className="signal-number">10</span><span>representative<br />city-pairs</span></div>
+          <div className="signal-item"><span className="signal-number">20</span><span>representative<br />city-pairs</span></div>
           <div className="signal-item"><span className="signal-number">30m</span><span>scheduled<br />refresh cycle</span></div>
           <div className="signal-item"><span className="signal-number">100%</span><span>traceable<br />observations</span></div>
           <div className="signal-tag">A clearer signal<br /><em>for a changing market.</em></div>
@@ -182,7 +190,16 @@ export default function Home() {
             </div>
             <div className="dashboard-footer"><span><span className="tiny-dot lime-dot" /> 1,842 observations</span><span><span className="tiny-dot blue-dot" /> 97.4% coverage</span><span><span className="tiny-dot amber-dot" /> 0.8% outliers flagged</span><span className="formula-note">Weighted median · route basket v1.0</span></div>
           </div>
-          <div className="route-selector"><span className="selector-label">Focus route</span>{(["ALL", "DEL-BOM", "DEL-BLR", "BOM-BLR", "DEL-CCU"] as RouteCode[]).map((route) => <button key={route} className={selectedRoute === route ? "selected" : ""} onClick={() => setSelectedRoute(route)}>{route === "ALL" ? "India basket" : route}</button>)}</div>
+          <div className="route-selector"><span className="selector-label">Focus route</span>{routeSelectors.map((route) => <button key={route} className={selectedRoute === route ? "selected" : ""} onClick={() => setSelectedRoute(route)}>{route === "ALL" ? "India basket" : route}</button>)}</div>
+        </section>
+
+        <section className="analytics-section section-pad">
+          <div className="section-heading"><div className="section-kicker">01A / Analytical views</div><h2>See the shape<br /><em>behind the number.</em></h2><p>Route intensity and booking-window behaviour sit beside the headline index so every movement has context.</p></div>
+          <div className="analytics-grid">
+            <div className="heatmap-card"><div className="analytics-card-top"><div><span className="card-kicker">Route intensity</span><h3>Sector heatmap</h3></div><span className="analytics-note">Daily index</span></div><div className="heatmap-grid">{heatmapRows.map((row) => { const intensity = Math.max(0, Math.min(1, (row.value - 100) / 45)); return <button key={row.routeCode} className="heatmap-cell" style={{ backgroundColor: `rgba(216,245,106,${0.12 + intensity * 0.78})` }} onClick={() => { setSelectedRoute(row.routeCode); scrollToId("dashboard"); }}><strong>{row.routeCode}</strong><span>{row.value.toFixed(1)}</span></button>; })}</div><div className="heatmap-legend"><span>Lower pressure</span><i /><span>Higher pressure</span></div></div>
+            <div className="elasticity-card"><div className="analytics-card-top"><div><span className="card-kicker">Booking-window effect</span><h3>Lead-time elasticity</h3></div><span className="analytics-note">{selectedRoute === "ALL" ? "India basket" : selectedRoute}</span></div>{leadTimeRows?.length ? <div className="elasticity-list">{leadTimeRows.map((row) => <div className="elasticity-row" key={row.leadDays}><span>T+{row.leadDays}</span><div><i style={{ width: `${Math.min(100, (row.averageFare / 9000) * 100)}%` }} /></div><strong>₹{Math.round(row.averageFare).toLocaleString("en-IN")}</strong></div>)}</div> : <div className="analytics-empty">Waiting for the latest eligible fare cohort.</div>}<div className="elasticity-footer"><span>Earlier booking</span><span>Closer to departure</span></div></div>
+          </div>
+          <div className="backtest-strip"><div><span className="card-kicker">30-day replay</span><strong>{backtestQuery.data ? `${backtestQuery.data.dayCount} days / ${backtestQuery.data.routeCount} routes` : "Back-test pending"}</strong></div><div><span>MAPE</span><b>{backtestQuery.data ? `${backtestQuery.data.mape.toFixed(2)}%` : "—"}</b></div><div><span>Correlation</span><b>{backtestQuery.data ? backtestQuery.data.correlation.toFixed(3) : "—"}</b></div><div className="backtest-status"><span className="tiny-dot amber-dot" /> {backtestQuery.data?.referenceStatus === "demo" ? "Demo reference · official route panel pending" : "Reference comparison"}</div></div>
         </section>
 
         <section id="platform" className="platform-section section-pad">

@@ -2,7 +2,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, publicProcedure, router } from "./_core/trpc";
-import { getLatestAggregate, getLatestRouteIndices, getRecentRuns, getSourceHealth, ensureApixSeedData, getRouteMetadata, getRouteSeries, getRouteObservations } from "./db";
+import { getLatestAggregate, getLatestRouteIndices, getRecentRuns, getSourceHealth, ensureApixSeedData, getRouteMetadata, getRouteSeries, getRouteObservations, getRouteLeadTimeProfile, getBasketLeadTimeProfile, getLatestBacktest } from "./db";
 import { runApixCollection } from "./apix";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -59,6 +59,22 @@ export const appRouter = router({
         const rows = await getRouteObservations(input.routeCode, input.limit);
         return { routeCode: input.routeCode, count: rows.length, data: rows.map((row) => ({ ...row, baseFare: Number(row.baseFare), taxes: Number(row.taxes), mandatoryCharges: Number(row.mandatoryCharges), totalFare: Number(row.totalFare) })) };
       }),
+      leadTime: publicProcedure.input(z.object({ routeCode: z.string().regex(/^[A-Z]{3}-[A-Z]{3}$/) })).query(async ({ input }) => {
+        await ensureApixSeedData();
+        const route = await getRouteMetadata(input.routeCode);
+        if (!route) throw new TRPCError({ code: "NOT_FOUND", message: `Route ${input.routeCode} is not in the APIx basket` });
+        const rows = await getRouteLeadTimeProfile(input.routeCode);
+        return { routeCode: input.routeCode, data: rows.map((row) => ({ leadDays: row.leadDays, averageFare: Number(row.averageFare), observationCount: Number(row.observationCount) })) };
+      }),
+    }),
+    backtest: publicProcedure.query(async () => {
+      const row = await getLatestBacktest();
+      return row ? { runKey: row.runKey, referenceSource: row.referenceSource, referenceStatus: row.referenceStatus, startDate: row.startDate, endDate: row.endDate, dayCount: row.dayCount, routeCount: row.routeCount, mape: Number(row.meanAbsolutePercentageError), rmse: Number(row.rootMeanSquareError), correlation: Number(row.correlation), reportUri: row.reportUri } : null;
+    }),
+    basketLeadTime: publicProcedure.query(async () => {
+      await ensureApixSeedData();
+      const rows = await getBasketLeadTimeProfile();
+      return { data: rows.map((row) => ({ leadDays: row.leadDays, averageFare: Number(row.averageFare), observationCount: Number(row.observationCount) })) };
     }),
     runNow: adminProcedure.mutation(async () => runApixCollection("manual")),
   }),

@@ -127,6 +127,26 @@ export const indexSnapshots = mysqlTable(
   (table) => [index("index_snapshot_lookup_idx").on(table.frequency, table.routeCode, table.calculatedAt)]
 );
 
+export const backtestRuns = mysqlTable(
+  "backtest_runs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    runKey: varchar("runKey", { length: 80 }).notNull().unique(),
+    referenceSource: text("referenceSource").notNull(),
+    referenceStatus: mysqlEnum("referenceStatus", ["official", "licensed", "demo", "pending_review"]).notNull(),
+    startDate: date("startDate").notNull(),
+    endDate: date("endDate").notNull(),
+    dayCount: int("dayCount").notNull(),
+    routeCount: int("routeCount").notNull(),
+    meanAbsolutePercentageError: decimal("meanAbsolutePercentageError", { precision: 10, scale: 4 }).notNull(),
+    rootMeanSquareError: decimal("rootMeanSquareError", { precision: 10, scale: 4 }).notNull(),
+    correlation: decimal("correlation", { precision: 10, scale: 6 }).notNull(),
+    reportUri: text("reportUri"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [index("backtest_created_idx").on(table.createdAt)]
+);
+
 export const scheduledJobs = mysqlTable("scheduled_jobs", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 100 }).notNull().unique(),
