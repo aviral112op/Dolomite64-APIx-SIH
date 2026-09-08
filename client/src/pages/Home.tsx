@@ -27,7 +27,7 @@ import {
 import { toast } from "sonner";
 
 type Frequency = "Daily" | "Weekly" | "Monthly";
-type RouteCode = "ALL" | "DEL-BOM" | "DEL-BLR" | "BOM-BLR" | "DEL-CCU";
+type RouteCode = string;
 
 type RouteData = {
   label: string;
@@ -38,7 +38,7 @@ type RouteData = {
   values: number[];
 };
 
-const routeData: Record<RouteCode, RouteData> = {
+const routeData: Record<string, RouteData> = {
   ALL: { label: "India basket", value: "118.42", delta: "+2.8%", direction: "up", color: "#d8f56a", values: [58,54,59,55,64,62,67,65,70,68,76,73,79,77,82,80,87,84,89,88,92,91,96,95,100,99,104,102,108,106,111,109] },
   "DEL-BOM": { label: "Delhi — Mumbai", value: "121.08", delta: "+4.1%", direction: "up", color: "#ff796d", values: [56,52,57,54,61,60,66,63,70,68,75,71,79,76,84,81,87,89,86,93,90,96,95,101,98,105,102,110,108,114,111,116] },
   "DEL-BLR": { label: "Delhi — Bengaluru", value: "116.72", delta: "+1.9%", direction: "up", color: "#a8c8ff", values: [57,56,58,57,62,61,64,65,66,69,67,71,70,73,74,76,78,77,80,82,81,84,83,87,86,89,91,90,94,95,97,99] },
@@ -51,6 +51,13 @@ const routes = [
   { route: "DEL-BLR", cities: "Delhi — Bengaluru", index: "116.72", change: "+1.9%", coverage: "96%", tone: "blue" },
   { route: "DEL-CCU", cities: "Delhi — Kolkata", index: "119.84", change: "+3.2%", coverage: "94%", tone: "violet" },
   { route: "BOM-BLR", cities: "Mumbai — Bengaluru", index: "114.36", change: "−0.6%", coverage: "91%", tone: "amber" },
+  { route: "BLR-HYD", cities: "Bengaluru — Hyderabad", index: "137.63", change: "+2.4%", coverage: "89%", tone: "blue" },
+  { route: "MAA-DEL", cities: "Chennai — Delhi", index: "129.89", change: "+1.7%", coverage: "88%", tone: "violet" },
+  { route: "BOM-CCU", cities: "Mumbai — Kolkata", index: "129.96", change: "+2.1%", coverage: "86%", tone: "coral" },
+  { route: "DEL-HYD", cities: "Delhi — Hyderabad", index: "134.14", change: "+3.6%", coverage: "90%", tone: "amber" },
+  { route: "DEL-JAI", cities: "Delhi — Jaipur", index: "128.62", change: "+1.2%", coverage: "84%", tone: "blue" },
+  { route: "BOM-COK", cities: "Mumbai — Kochi", index: "126.18", change: "+2.9%", coverage: "82%", tone: "violet" },
+  { route: "CCU-GAU", cities: "Kolkata — Guwahati", index: "131.46", change: "+0.8%", coverage: "79%", tone: "amber" },
 ];
 
 function chartPath(values: number[], width = 740, height = 220) {
@@ -84,7 +91,8 @@ export default function Home() {
   const [frequency, setFrequency] = useState<Frequency>("Daily");
   const [selectedRoute, setSelectedRoute] = useState<RouteCode>("ALL");
   const liveRoute = selectedRoute === "ALL" ? liveQuery.data?.aggregate : liveQuery.data?.routes.find((row) => row.routeCode === selectedRoute);
-  const active = liveRoute ? { ...routeData[selectedRoute], value: liveRoute.value.toFixed(2), delta: `${liveRoute.changePct >= 0 ? "+" : ""}${liveRoute.changePct.toFixed(1)}%`, direction: liveRoute.changePct >= 0 ? "up" as const : "down" as const } : routeData[selectedRoute];
+  const activeBase = routeData[selectedRoute] ?? { label: selectedRoute, value: "—", delta: "—", direction: "up" as const, color: "#a8c8ff", values: routeData.ALL.values };
+  const active = liveRoute ? { ...activeBase, value: liveRoute.value.toFixed(2), delta: `${liveRoute.changePct >= 0 ? "+" : ""}${liveRoute.changePct.toFixed(1)}%`, direction: liveRoute.changePct >= 0 ? "up" as const : "down" as const } : activeBase;
 
   const chartStats = useMemo(() => {
     if (frequency === "Monthly") return { value: "118.42", change: "+4.7%", range: "Aug 2026" };
@@ -93,6 +101,12 @@ export default function Home() {
   }, [active, frequency, liveQuery.data]);
 
   const showComingSoon = (message: string) => toast(message);
+  const displayRoutes = liveQuery.data?.routes?.length
+    ? liveQuery.data.routes.slice(0, 10).map((row) => {
+        const fallback = routes.find((item) => item.route === row.routeCode);
+        return { route: row.routeCode, cities: fallback?.cities ?? row.routeCode, index: row.value.toFixed(2), change: `${row.changePct >= 0 ? "+" : "−"}${Math.abs(row.changePct).toFixed(1)}%`, coverage: `${Math.round(row.coverageRatio * 100)}%`, tone: fallback?.tone ?? "blue" };
+      })
+    : routes;
 
   return (
     <div className="site-shell">
@@ -188,7 +202,7 @@ export default function Home() {
 
         <section id="governance" className="governance-section section-pad"><div className="governance-inner"><div className="section-kicker">04 / Governance</div><h2>Fast does not mean<br /><em>careless.</em></h2><p className="governance-lede">A real-time signal is only useful when the way it was made is just as clear as the number itself.</p><div className="governance-grid"><div><LockKeyhole size={20} /><strong>Permission first</strong><p>APIx prefers official feeds, licensed APIs, and explicit source agreements.</p></div><div><ShieldCheck size={20} /><strong>Ethical by default</strong><p>No CAPTCHA bypass, private data, or proxy evasion. Every source has a kill switch.</p></div><div><Database size={20} /><strong>Evidence retained</strong><p>Immutable raw artifacts and processing versions make every release auditable.</p></div></div><button className="light-button" onClick={() => showComingSoon("The full source policy register is part of the data workspace.")}>Read the source policy <ChevronRight size={16} /></button></div></section>
 
-        <section className="routes-section section-pad"><div className="section-heading heading-row"><div><div className="section-kicker">05 / Route watch</div><h2>Where the signal<br /><em>is moving.</em></h2></div><button className="text-button dark-text" onClick={() => showComingSoon("Route-level API access is coming in the next release.")}>See all routes <ChevronRight size={16} /></button></div><div className="route-table">{routes.map((item) => <button className="route-row" key={item.route} onClick={() => { setSelectedRoute(item.route as RouteCode); scrollToId("dashboard"); }}><span className={`route-bullet ${item.tone}`} /><span className="route-code">{item.route}</span><span className="route-cities">{item.cities}</span><span className="route-index">{item.index}</span><span className={`route-change ${item.change.startsWith("−") ? "negative" : ""}`}>{item.change}</span><span className="route-coverage"><i style={{ width: item.coverage }} />{item.coverage} coverage</span><ChevronRight className="row-arrow" size={17} /></button>)}</div></section>
+        <section className="routes-section section-pad"><div className="section-heading heading-row"><div><div className="section-kicker">05 / Route watch</div><h2>Where the signal<br /><em>is moving.</em></h2></div><button className="text-button dark-text" onClick={() => showComingSoon("Route API: GET /api/v1/routes/{routeCode}/series")}>Route API access <ChevronRight size={16} /></button></div><div className="route-table">{displayRoutes.map((item) => <button className="route-row" key={item.route} onClick={() => { setSelectedRoute(item.route as RouteCode); scrollToId("dashboard"); }}><span className={`route-bullet ${item.tone}`} /><span className="route-code">{item.route}</span><span className="route-cities">{item.cities}</span><span className="route-index">{item.index}</span><span className={`route-change ${item.change.startsWith("−") ? "negative" : ""}`}>{item.change}</span><span className="route-coverage"><i style={{ width: item.coverage }} />{item.coverage} coverage</span><ChevronRight className="row-arrow" size={17} /></button>)}</div></section>
 
         <section className="cta-section section-pad"><div className="cta-grid" /><div className="cta-content"><div className="section-kicker">Built for the next release</div><h2>Make every<br /><em>movement count.</em></h2><p>APIx gives policymakers, researchers, and market observers a faster, more defensible view of airfare inflation.</p><button className="primary-button" onClick={() => showComingSoon("The APIx data workspace is currently in prototype.")}>Request the data brief <ArrowUpRight size={16} /></button></div><div className="cta-side"><div className="cta-mark"><Waypoints size={23} /></div><span>NSO · RBI · MoSPI</span><small>Ready for the next layer<br />of economic intelligence.</small></div></section>
       </main>

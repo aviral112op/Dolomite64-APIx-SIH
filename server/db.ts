@@ -77,6 +77,16 @@ export async function ensureApixSeedData() {
     ["DEL-HYD", "DEL", "HYD", "Delhi — Hyderabad", "0.07"],
     ["BOM-GOI", "BOM", "GOI", "Mumbai — Goa", "0.05"],
     ["BLR-MAA", "BLR", "MAA", "Bengaluru — Chennai", "0.05"],
+    ["DEL-JAI", "DEL", "JAI", "Delhi — Jaipur", "0.03"],
+    ["DEL-LKO", "DEL", "LKO", "Delhi — Lucknow", "0.03"],
+    ["DEL-PNQ", "DEL", "PNQ", "Delhi — Pune", "0.03"],
+    ["BOM-AMD", "BOM", "AMD", "Mumbai — Ahmedabad", "0.03"],
+    ["BOM-COK", "BOM", "COK", "Mumbai — Kochi", "0.03"],
+    ["BLR-CCU", "BLR", "CCU", "Bengaluru — Kolkata", "0.03"],
+    ["HYD-MAA", "HYD", "MAA", "Hyderabad — Chennai", "0.02"],
+    ["MAA-BOM", "MAA", "BOM", "Chennai — Mumbai", "0.02"],
+    ["CCU-GAU", "CCU", "GAU", "Kolkata — Guwahati", "0.02"],
+    ["DEL-SXR", "DEL", "SXR", "Delhi — Srinagar", "0.02"],
   ] as const;
   for (const [routeCode, origin, destination, cityPair, trafficWeight] of routes) {
     await db.insert(routeBasket).values({ routeCode, origin, destination, cityPair, trafficWeight }).onDuplicateKeyUpdate({ set: { trafficWeight } });
@@ -145,8 +155,34 @@ export async function getLatestAggregate() {
 export async function getLatestRouteIndices() {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select().from(indexSnapshots).where(and(eq(indexSnapshots.frequency, "daily"), sql`${indexSnapshots.routeCode} <> 'ALL'`)).orderBy(desc(indexSnapshots.calculatedAt)).limit(10);
+  const rows = await db.select().from(indexSnapshots).where(and(eq(indexSnapshots.frequency, "daily"), sql`${indexSnapshots.routeCode} <> 'ALL'`)).orderBy(desc(indexSnapshots.calculatedAt)).limit(50);
   return rows;
+}
+
+export async function getRouteMetadata(routeCode: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(routeBasket).where(eq(routeBasket.routeCode, routeCode)).limit(1);
+  return rows[0];
+}
+
+export async function getRouteSeries(routeCode: string, frequency: "daily" | "weekly" | "monthly", limit: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(indexSnapshots)
+    .where(and(eq(indexSnapshots.routeCode, routeCode), eq(indexSnapshots.frequency, frequency)))
+    .orderBy(desc(indexSnapshots.calculatedAt)).limit(limit);
+}
+
+export async function getRouteObservations(routeCode: string, limit: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const route = await getRouteMetadata(routeCode);
+  if (!route) return [];
+  return db.select({ id: fareObservations.id, sourceId: fareObservations.sourceId, carrier: fareObservations.carrier, travelDate: fareObservations.travelDate, leadDays: fareObservations.leadDays, fareFamily: fareObservations.fareFamily, baseFare: fareObservations.baseFare, taxes: fareObservations.taxes, mandatoryCharges: fareObservations.mandatoryCharges, totalFare: fareObservations.totalFare, qualityStatus: fareObservations.qualityStatus, collectedAt: fareObservations.collectedAt })
+    .from(fareObservations)
+    .where(and(eq(fareObservations.origin, route.origin), eq(fareObservations.destination, route.destination)))
+    .orderBy(desc(fareObservations.collectedAt)).limit(limit);
 }
 
 export async function getRecentRuns(limit = 8) {
